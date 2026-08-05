@@ -228,7 +228,7 @@ def update_course_statistics():
 
 	for course in courses:
 		lessons = get_lesson_count(course.name)
-		enrollments = frappe.db.count("LMS Enrollment", {"course": course.name, "member_type": "Student"})
+		enrollments = get_enrollment_count(course.name)
 		avg_rating = get_average_rating(course.name) or 0
 		avg_rating = flt(avg_rating, frappe.get_system_settings("float_precision") or 3)
 
@@ -237,3 +237,31 @@ def update_course_statistics():
 			course.name,
 			{"lessons": lessons, "enrollments": enrollments, "rating": avg_rating},
 		)
+
+
+def get_enrollment_count(course: str) -> int:
+	# Deliberately unfiltered by member_type. The dashboard divides progress and
+	# lesson-completion counts by this number and draws those numerators from every
+	# enrollment, so filtering the denominator alone made the "Enrolled" tile read
+	# lower than the student list beside it and pushed completion rates past 100%.
+	# member_type is vestigial anyway — nothing sets it, so rows predating its
+	# "Student" default sit blank and were silently dropped from the old count.
+	return frappe.db.count("LMS Enrollment", {"course": course})
+
+
+def update_enrollment_count(course: str):
+	"""Refresh one course's denormalized enrollment count.
+
+	Called when an enrollment is created or removed. Without it the count only
+	catches up on the hourly update_course_statistics run, so a freshly created
+	course reports zero enrolled students for up to an hour.
+	"""
+	if not course or not frappe.db.exists("LMS Course", course):
+		return
+
+	# update_modified=False: a student enrolling is not an edit of the course. Bumping
+	# modified here would hand a TimestampMismatchError to any instructor who happens
+	# to have the course open in a form.
+	frappe.db.set_value(
+		"LMS Course", course, "enrollments", get_enrollment_count(course), update_modified=False
+	)

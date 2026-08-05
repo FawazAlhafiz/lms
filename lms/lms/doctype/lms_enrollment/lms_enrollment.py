@@ -35,8 +35,31 @@ class LMSEnrollment(Document):
 		if self.owner != self.member:
 			self.owner = self.member
 
+	def after_insert(self):
+		update_course_enrollment_count(self.course)
+
 	def on_update(self):
 		update_program_progress(self.member)
+		self.refresh_enrollment_counts()
+
+	def after_delete(self):
+		# after_delete, not on_trash: on_trash runs before the row is gone, so the
+		# recount would still count the enrollment being deleted.
+		update_course_enrollment_count(self.course)
+
+	def refresh_enrollment_counts(self):
+		"""Move this member between two courses' counts when the enrollment is reassigned.
+
+		after_insert already covers new rows, and every lesson-progress write reaches
+		on_update as well, so only an actual change of course is worth recounting.
+		"""
+		if self.flags.in_insert or not self.has_value_changed("course"):
+			return
+
+		previous = self.get_doc_before_save()
+		if previous:
+			update_course_enrollment_count(previous.course)
+		update_course_enrollment_count(self.course)
 
 	def validate_duplicate_enrollment(self):
 		existing_enrollment = frappe.db.exists(
@@ -102,6 +125,14 @@ def is_admin():
 		if role in roles:
 			return True
 	return False
+
+
+def update_course_enrollment_count(course):
+	# Imported here, not at module scope: lms.lms.utils imports this module and
+	# lms_course imports lms.lms.utils, so a top-level import closes the cycle.
+	from lms.lms.doctype.lms_course.lms_course import update_enrollment_count
+
+	update_enrollment_count(course)
 
 
 def update_program_progress(member):
