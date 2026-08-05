@@ -2634,6 +2634,12 @@ def delete_programming_exercise(exercise: str):
 
 @frappe.whitelist()
 def get_lesson_completion_stats(course: str):
+	"""Per-lesson completion counts for the course dashboard, in chapter/lesson order.
+
+	completion_count counts only members who are *currently enrolled*, which keeps it
+	comparable with LMS Course.enrollments — the denominator the dashboard turns these
+	rows into percentages with.
+	"""
 	roles = frappe.get_roles()
 	if "Course Creator" not in roles and "Moderator" not in roles:
 		frappe.throw(_("You do not have permission to access lesson completion stats."))
@@ -2642,6 +2648,7 @@ def get_lesson_completion_stats(course: str):
 	LessonReference = frappe.qb.DocType("Lesson Reference")
 	ChapterReference = frappe.qb.DocType("Chapter Reference")
 	Lesson = frappe.qb.DocType("Course Lesson")
+	Enrollment = frappe.qb.DocType("LMS Enrollment")
 
 	rows = (
 		frappe.qb.from_(LessonReference)
@@ -2655,13 +2662,18 @@ def get_lesson_completion_stats(course: str):
 			& (CourseProgress.course == course)
 			& (CourseProgress.status == "Complete")
 		)
+		.left_join(Enrollment)
+		.on((Enrollment.course == course) & (Enrollment.member == CourseProgress.member))
 		.select(
 			LessonReference.idx,
 			ChapterReference.idx.as_("chapter_idx"),
 			CourseProgress.lesson,
 			Lesson.title,
 			Lesson.name.as_("lesson_name"),
-			fn.Count(CourseProgress.name).as_("completion_count"),
+			# Count the enrollment, not the progress row: progress rows outlive the
+			# enrollment (nothing deletes them on unenroll), and the left join leaves
+			# those ghosts NULL, so COUNT skips them.
+			fn.Count(Enrollment.name).as_("completion_count"),
 		)
 		.where(ChapterReference.parent == course)
 		.groupby(LessonReference.lesson)
